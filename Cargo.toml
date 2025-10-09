@@ -1,0 +1,20 @@
+[package]
+name = "socket"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "server"
+path = "src/server.rs"
+
+[[bin]]
+name = "client"
+path = "src/client.rs"
+
+[[bin]]
+name = "server_muti"
+path = "src/server_muti.rs"
+
+[dependencies]
+signal-hook = "0.3.18"
+rand = "0.10.0-rc.0"
