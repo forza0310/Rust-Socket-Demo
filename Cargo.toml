@@ -12,9 +12,14 @@ name = "client"
 path = "src/client.rs"
 
 [[bin]]
-name = "server_muti"
-path = "src/server_muti.rs"
+name = "server_muti_thread"
+path = "src/server_muti_thread.rs"
+
+[[bin]]
+name = "server_muti_process"
+path = "src/server_muti_process.rs"
 
 [dependencies]
 signal-hook = "0.3.18"
 rand = "0.10.0-rc.0"
+libc = "0.2.177"
