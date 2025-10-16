@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
-use signal_hook::consts::{SIGINT, SIGPIPE, SIGKILL};
+use signal_hook::consts::{SIGINT, SIGPIPE, SIGCHLD};
 use signal_hook::iterator::Signals;
 use rand::Rng;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,21 +22,12 @@ fn main() {
     let local_addr = listener.local_addr().unwrap().to_string();
     println!("[srv] server[{}] is initializing![{}]", local_addr, veri_code);
 
-    // 创建连接管理器
-    // Arc 提供了线程间安全的引用计数
-    // Mutex 确保同一时间只有一个线程能访问 HashMap
-    // connections.clone() 调用的是 Arc 的 clone 方法，它会：
-    // - 增加内部引用计数
-    // - 返回一个新的 Arc 实例
-    // - 但这个新的 Arc 实例指向的是同一个 Mutex<HashMap<u32, TcpStream>>
-    let connections: Connections = Arc::new(Mutex::new(HashMap::new()));
-    let connections_clone = connections.clone(); // Arc 智能指针，它指向堆上的 HashMap
-
     // 创建子进程ID存储器
-    let mut child_pids: Vec<i32> = Vec::new();
+    let mut child_pids: Arc<Mutex<HashSet<i32>>> = Arc::new(Mutex::new(HashSet::new()));
+    let child_pids_clone = child_pids.clone();
 
     // 设置信号处理
-    let mut signals = Signals::new(&[SIGINT,]).expect("无法创建信号处理器");
+    let mut signals = Signals::new(&[SIGINT, SIGCHLD]).expect("无法创建信号处理器");
 
     // 在单独的线程中处理信号，避免阻塞主线程
     let signal_handle = std::thread::spawn(move || {
@@ -44,29 +35,39 @@ fn main() {
         // 在这个例子中，signals 和 local_addr 等变量需要被移动到新线程
         // 这确保了新线程可以独立访问这些变量，而不用担心生命周期
         for sig in signals.forever() {
+            let mut child_pids = child_pids_clone.lock().unwrap();
             match sig {
                 SIGINT => {
                     println!("[srv] SIGINT is coming!");
                     SIGINT_FLAG.store(true, Ordering::SeqCst);
-
-                    println!("[srv] 关闭所有活动连接");
-                    let mut connections = connections_clone.lock().unwrap();
-                    for (_, stream) in connections.iter() {
-                        stream.shutdown(std::net::Shutdown::Both).expect("无法关闭连接");
+                    println!("[srv] 向所有子进程发送SIGINT");
+                    for pid in child_pids.iter() {
+                        unsafe { libc::kill(*pid, SIGINT); }
                     }
-                    connections.clear();
-
                     println!("[srv] 主动连接一次本地地址以唤醒accept()");
                     let _ = TcpStream::connect(local_addr);
 
                     break; // 退出信号监听循环
+                },
+                SIGCHLD => {
+                    println!("[srv] SIGCHLD is coming!");
+                    unsafe {
+                        let mut pid;
+                        while {
+                            pid = libc::waitpid(-1, std::ptr::null_mut(), libc::WNOHANG);
+                            pid > 0
+                        } {
+                            println!("[srv] 收到子进程[{}]的退出信号", pid);
+                            child_pids.remove(&pid);
+                        }
+                    };
                 },
                 _ => unreachable!(),
             }
         }
     });
 
-    // 多线程 处理客户端请求的大循环
+    // 多进程 处理客户端请求的大循环
     let mut connection_counter = 0u32;
     loop {
         // 检查信号标志
@@ -80,13 +81,7 @@ fn main() {
                 let peer_addr = stream.peer_addr().unwrap();
                 println!("[srv] client[{}] is accepted!", peer_addr);
 
-                // 将新连接添加到连接管理器中
-                connection_counter += 1;
-                let connection_id = connection_counter;
-                connections.lock().unwrap().insert(connection_id, stream.try_clone().unwrap());
-
-                // 克隆需要传递给线程的变量
-                let connections_clone = connections.clone();
+                // 克隆需要传递给进程的变量
                 let stream_clone = stream.try_clone().unwrap();
 
                 // 创建子进程处理客户端请求
@@ -95,7 +90,6 @@ fn main() {
                         0 => {
                             // 子进程
                             // 关闭不需要的资源
-                            drop(connections);
                             drop(listener);
                             drop(signal_handle);
                             // signal-hook 库会包装原本的信号处理器、缓存收到的信号（缓存在Signals变量中）。
@@ -103,11 +97,8 @@ fn main() {
                             // 去消耗缓存的信号，这会产生非预期的行为，因此必须要重置相关的信号处理器。
                             libc::signal(SIGINT, libc::SIG_DFL); // 重置信号处理器
                             // 如果需要创建子进程的信号处理器，可在这里补充
-                            
-                            handle_client(stream_clone, peer_addr, veri_code);
 
-                            // 从连接管理器中移除已处理的连接
-                            connections_clone.lock().unwrap().remove(&connection_id);
+                            handle_client(stream_clone, peer_addr, veri_code);
 
                             // 子进程退出
                             println!("子进程退出");
@@ -115,7 +106,7 @@ fn main() {
                         }
                         pid if pid > 0 => {
                             // 父进程
-                            child_pids.push(pid);
+                            child_pids.lock().unwrap().insert(pid);
                             println!("[srv] 创建子进程[{}]", pid);
                             // 父进程不需要这个连接，关闭它
                             drop(stream_clone);
@@ -130,13 +121,6 @@ fn main() {
                 eprintln!("接受连接失败: {}", e);
             }
         }
-    }
-
-    // 等待所有子进程退出
-    println!("等待所有子进程退出...");
-    for pid in child_pids {
-        let mut status = 0;
-        unsafe { libc::waitpid(pid, &mut status, 0) };
     }
 
     // 等待所有子线程退出

@@ -6,6 +6,7 @@ use signal_hook::consts::{SIGINT, SIGPIPE,};
 use signal_hook::iterator::Signals;
 use rand::Rng;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::{JoinHandle, ThreadId};
 
 // 使用原子变量作为全局sigint_flag，0表示未收到信号，1表示收到SIGINT信号
 static SIGINT_FLAG: AtomicBool = AtomicBool::new(false);
@@ -33,7 +34,7 @@ fn main() {
     let connections_clone = connections.clone(); // Arc 智能指针，它指向堆上的 HashMap
 
     // 创建线程句柄存储器
-    let mut thread_handles: Vec<std::thread::JoinHandle<()>> = Vec::new();
+    let mut thread_handles: HashMap<ThreadId, JoinHandle<()>> = HashMap::new();
 
     // 设置信号处理
     let mut signals = Signals::new(&[SIGINT,]).expect("无法创建信号处理器");
@@ -68,7 +69,7 @@ fn main() {
             }
         }
     });
-    thread_handles.push(handle);
+    thread_handles.insert(handle.thread().id(), handle);
 
     // 多线程 处理客户端请求的大循环
     let mut connection_counter = 0u32;
@@ -99,7 +100,7 @@ fn main() {
                     // 从连接管理器中移除已处理的连接
                     connections_clone.lock().unwrap().remove(&connection_id);
                 });
-                thread_handles.push(handle);
+                thread_handles.insert(handle.thread().id(), handle);
             }
             Err(e) => {
                 eprintln!("接受连接失败: {}", e);
@@ -109,7 +110,7 @@ fn main() {
 
     // 等待所有子线程退出
     println!("等待所有子线程退出...");
-    for handle in thread_handles {
+    for (_, handle) in thread_handles {
         if let Err(e) = handle.join() {
             eprintln!("线程等待出错: {:?}", e);
         }
