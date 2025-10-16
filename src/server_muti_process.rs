@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
-use signal_hook::consts::{SIGINT, SIGPIPE,};
+use signal_hook::consts::{SIGINT, SIGPIPE, SIGKILL};
 use signal_hook::iterator::Signals;
 use rand::Rng;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,9 +45,6 @@ fn main() {
         // 这确保了新线程可以独立访问这些变量，而不用担心生命周期
         for sig in signals.forever() {
             match sig {
-                // process handle SIGINT -p true -s false // 加到 ~/.lldbinit
-                // process status
-                // platform shell kill -INT <PID>
                 SIGINT => {
                     println!("[srv] SIGINT is coming!");
                     SIGINT_FLAG.store(true, Ordering::SeqCst);
@@ -101,7 +98,12 @@ fn main() {
                             drop(connections);
                             drop(listener);
                             drop(signal_handle);
-
+                            // signal-hook 库会包装原本的信号处理器、缓存收到的信号（缓存在Signals变量中）。
+                            // 当 fork() 被调用时，子进程继承了包装后的信号处理器和Signals变量，但是没有专门的线程
+                            // 去消耗缓存的信号，这会产生非预期的行为，因此必须要重置相关的信号处理器。
+                            libc::signal(SIGINT, libc::SIG_DFL); // 重置信号处理器
+                            // 如果需要创建子进程的信号处理器，可在这里补充
+                            
                             handle_client(stream_clone, peer_addr, veri_code);
 
                             // 从连接管理器中移除已处理的连接
