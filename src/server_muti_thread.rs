@@ -2,9 +2,8 @@ use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
-use signal_hook::consts::{SIGINT, SIGPIPE,};
+use signal_hook::consts::{SIGINT,};
 use signal_hook::iterator::Signals;
-use rand::Rng;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{JoinHandle, ThreadId};
 
@@ -17,11 +16,10 @@ const MAX_MSG_LEN: usize = 120;
 const BUFFER_SIZE: usize = MAX_MSG_LEN + 2 + 18;
 
 fn main() {
-    let veri_code = rand::rng().random_range(10000..100000);
     // 创建TCP监听器，绑定到指定地址和端口
     let listener = TcpListener::bind("0.0.0.0:8080").expect("无法绑定到地址");
     let local_addr = listener.local_addr().unwrap().to_string();
-    println!("[srv] server[{}] is initializing![{}]", local_addr, veri_code);
+    println!("[srv] server[{}] is initializing!", local_addr);
 
     // 创建连接管理器
     // Arc 提供了线程间安全的引用计数
@@ -40,7 +38,7 @@ fn main() {
     let mut signals = Signals::new(&[SIGINT,]).expect("无法创建信号处理器");
 
     // 在单独的线程中处理信号，避免阻塞主线程
-    let handle = std::thread::spawn(move || {
+    std::thread::spawn(move || {
         // move 关键字使闭包获取外部变量的所有权，而不是借用
         // 在这个例子中，signals 和 local_addr 等变量需要被移动到新线程
         // 这确保了新线程可以独立访问这些变量，而不用担心生命周期
@@ -61,15 +59,12 @@ fn main() {
                     connections.clear();
 
                     println!("[srv] 主动连接一次本地地址以唤醒accept()");
-                    let _ = TcpStream::connect(local_addr);
-
-                    break; // 退出信号监听循环
+                    let _ = TcpStream::connect(&local_addr);
                 },
                 _ => unreachable!(),
             }
         }
     });
-    thread_handles.insert(handle.thread().id(), handle);
 
     // 多线程 处理客户端请求的大循环
     let mut connection_counter = 0u32;
@@ -96,7 +91,7 @@ fn main() {
 
                 // 创建新线程处理客户端请求
                 let handle = std::thread::spawn(move || {
-                    handle_client(stream_clone, peer_addr, veri_code);
+                    handle_client(stream_clone, peer_addr, std::thread::current().id());
                     // 从连接管理器中移除已处理的连接
                     connections_clone.lock().unwrap().remove(&connection_id);
                 });
@@ -109,18 +104,19 @@ fn main() {
     }
 
     // 等待所有子线程退出
-    println!("等待所有子线程退出...");
-    for (_, handle) in thread_handles {
+    println!("等待所通信子线程退出...");
+    for (tid, handle) in thread_handles {
         if let Err(e) = handle.join() {
             eprintln!("线程等待出错: {:?}", e);
         }
+        println!("[srv] 子线程[{:?}]成功join", tid);
     }
 
     // 正常退出服务器
     println!("服务器关闭");
 }
 
-fn handle_client(mut stream: TcpStream, peer_addr: SocketAddr, veri_code: i32) {
+fn handle_client(mut stream: TcpStream, peer_addr: SocketAddr, tid: ThreadId) {
     let mut buffer= [0_u8; BUFFER_SIZE];
 
     // 收发业务数据的小循环
@@ -129,30 +125,30 @@ fn handle_client(mut stream: TcpStream, peer_addr: SocketAddr, veri_code: i32) {
         match stream.read(&mut buffer) {
             Ok(0) => {
                 // 客户端正常关闭连接
-                println!("[srv] client[{}] is closed!", peer_addr);
+                println!("[{:?}] client[{}] is closed!", tid, peer_addr);
                 break;
             }
             Ok(size) => {
-                println!("从客户端 {} 接收到 {} 字节数据", peer_addr, size);
+                println!("[{:?}] 从客户端 {} 接收到 {} 字节数据", tid, peer_addr, size);
 
                 // 解析自定义应用层协议PDU（在这里只是简单地回显）
                 // 实际应用中可以在此处添加业务逻辑处理
-                let response = format!("({}){}", veri_code, String::from_utf8_lossy(&buffer[..size]));
+                let response = format!("({:?}){}", tid, String::from_utf8_lossy(&buffer[..size]));
                 println!("{}", response);
 
                 // 将接收到的数据原样发送回客户端（实现echo功能）
                 match stream.write_all(response.as_bytes()) {
                     Ok(_) => {
-                        println!("向客户端 {} 发送 {} 字节数据",peer_addr, size);
+                        println!("[{:?}] 向客户端 {} 发送 {} 字节数据", tid, peer_addr, size);
                     }
                     Err(e) => {
-                        eprintln!("写入客户端 {} 失败: {}", peer_addr, e);
+                        eprintln!("[{:?}] 写入客户端 {} 失败: {}", tid, peer_addr, e);
                         break;
                     }
                 }
             }
             Err(e) => {
-                eprintln!("读取客户端 {} 数据失败: {}", peer_addr, e);
+                eprintln!("[{:?}] 读取客户端 {} 数据失败: {}", tid, peer_addr, e);
                 break;
             }
         }
@@ -161,5 +157,5 @@ fn handle_client(mut stream: TcpStream, peer_addr: SocketAddr, veri_code: i32) {
     // std::thread::sleep(std::time::Duration::from_secs(5)); // 模拟子线程退出的延迟
 
     // 连接会在drop时自动关闭
-    println!("与客户端 {} 的连接已关闭", peer_addr);
+    println!("[{:?}] 与客户端 {} 的连接已关闭", tid, peer_addr);
 }
