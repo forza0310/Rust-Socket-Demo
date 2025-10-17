@@ -10,7 +10,7 @@ use std::thread::{JoinHandle, ThreadId};
 // 使用原子变量作为全局sigint_flag，0表示未收到信号，1表示收到SIGINT信号
 static SIGINT_FLAG: AtomicBool = AtomicBool::new(false);
 
-type Connections = Arc<Mutex<HashMap<u32, TcpStream>>>;
+type Connections = Arc<Mutex<HashMap<ThreadId, TcpStream>>>;  // 为了唤醒阻塞中的线程
 
 const MAX_MSG_LEN: usize = 120;
 const BUFFER_SIZE: usize = MAX_MSG_LEN + 2 + 18;
@@ -67,7 +67,6 @@ fn main() {
     });
 
     // 多线程 处理客户端请求的大循环
-    let mut connection_counter = 0u32;
     loop {
         // 检查信号标志
         if SIGINT_FLAG.load(Ordering::SeqCst) {
@@ -75,15 +74,34 @@ fn main() {
             break;
         }
 
-        match listener.accept() { // 没有连接时会被阻塞，RUST中会自动恢复被信号中断的系统调用（library/std/src/sys/pal/unix/mod.rs::cvt_r() ）。
+        // 定期清理已完成的线程
+        println!("清理通信子线程...");
+        let finished_threads: Vec<_> = thread_handles
+            .iter()
+            .filter(|(_, handle)| handle.is_finished())
+            .map(|(tid, _)| *tid)
+            .collect();
+
+        for tid in finished_threads {
+            if let Some(handle) = thread_handles.remove(&tid) {
+                match handle.join() {
+                    Ok(_) => {
+                        println!("[srv] 子线程[{:?}]成功join", tid);
+                    }
+                    Err(e) => {
+                        eprintln!("[srv] 子线程[{:?}] join失败: {:?}", tid, e);
+                    }
+                }
+            }
+        }
+
+        match listener.accept() { // 没有连接时会被阻塞，RUST会自动恢复被信号中断的accept()慢系统调用（std/src/sys/pal/unix/mod.rs::cvt_r() ）。
             Ok((stream, _)) => {
                 let peer_addr = stream.peer_addr().unwrap();
                 println!("[srv] client[{}] is accepted!", peer_addr);
 
                 // 将新连接添加到连接管理器中
-                connection_counter += 1;
-                let connection_id = connection_counter;
-                connections.lock().unwrap().insert(connection_id, stream.try_clone().unwrap());
+                connections.lock().unwrap().insert(std::thread::current().id(), stream.try_clone().unwrap());
 
                 // 克隆需要传递给线程的变量
                 let connections_clone = connections.clone();
@@ -93,7 +111,7 @@ fn main() {
                 let handle = std::thread::spawn(move || {
                     handle_client(stream_clone, peer_addr, std::thread::current().id());
                     // 从连接管理器中移除已处理的连接
-                    connections_clone.lock().unwrap().remove(&connection_id);
+                    connections_clone.lock().unwrap().remove(&std::thread::current().id());
                 });
                 thread_handles.insert(handle.thread().id(), handle);
             }
