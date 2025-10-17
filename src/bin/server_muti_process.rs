@@ -1,17 +1,14 @@
 use std::collections::{HashSet};
-use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use signal_hook::consts::{SIGINT, SIGCHLD};
 use signal_hook::iterator::Signals;
-// use rand::Rng;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+use socket::network_handler::handle_client2;
 
 // 使用原子变量作为全局sigint_flag，0表示未收到信号，1表示收到SIGINT信号
 static SIGINT_FLAG: AtomicBool = AtomicBool::new(false);
-
-const MAX_MSG_LEN: usize = 120;
-const BUFFER_SIZE: usize = MAX_MSG_LEN + 2 + 18;
 
 fn main() {
     // 创建TCP监听器，绑定到指定地址和端口
@@ -109,7 +106,7 @@ fn main() {
                                 }
                             });
 
-                            handle_client(stream_clone, peer_addr, pid);
+                            handle_client2(stream_clone, peer_addr, pid);
 
                             // 子进程退出
                             println!("[{}] 子进程退出", pid);
@@ -142,48 +139,4 @@ fn main() {
 
     // 正常退出服务器
     println!("服务器关闭");
-}
-
-fn handle_client(mut stream: TcpStream, peer_addr: SocketAddr, pid: i32) {
-    let mut buffer= [0_u8; BUFFER_SIZE];
-
-    // 收发业务数据的小循环
-    loop {
-        // 接收来自客户端的数据
-        match stream.read(&mut buffer) {
-            Ok(0) => {
-                // 客户端正常关闭连接
-                println!("[{}] client[{}] is closed!", pid, peer_addr);
-                break;
-            }
-            Ok(size) => {
-                println!("从客户端 {} 接收到 {} 字节数据", peer_addr, size);
-
-                // 解析自定义应用层协议PDU（在这里只是简单地回显）
-                // 实际应用中可以在此处添加业务逻辑处理
-                let response = format!("({}){}", pid, String::from_utf8_lossy(&buffer[..size]));
-                println!("{}", response);
-
-                // 将接收到的数据原样发送回客户端（实现echo功能）
-                match stream.write_all(response.as_bytes()) {
-                    Ok(_) => {
-                        println!("[{}] 向客户端 {} 发送 {} 字节数据",pid, peer_addr, size);
-                    }
-                    Err(e) => {
-                        eprintln!("[{}] 写入客户端 {} 失败: {}", pid, peer_addr, e);
-                        break;
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("[{}] 读取客户端 {} 数据失败: {}", pid, peer_addr, e);
-                break;
-            }
-        }
-    }
-
-    // std::thread::sleep(std::time::Duration::from_secs(5)); // 模拟子线程退出的延迟
-
-    // 连接会在drop时自动关闭
-    println!("[{}] 与客户端 {} 的连接已关闭", pid, peer_addr);
 }

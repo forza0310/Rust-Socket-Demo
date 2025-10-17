@@ -1,4 +1,3 @@
-// 文件路径: src/client.rs
 use std::net::{Shutdown, TcpStream};
 use std::io::{stdin, stdout, Read, Write};
 
