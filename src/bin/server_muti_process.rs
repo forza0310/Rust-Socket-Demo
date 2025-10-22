@@ -106,7 +106,7 @@ fn main() {
                                 }
                             });
 
-                            handle_client2(stream_clone, peer_addr, pid);
+                            handle_client2(stream_clone, peer_addr, pid as u32);
 
                             // 子进程退出
                             println!("[{}] 子进程退出", pid);

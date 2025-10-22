@@ -14,9 +14,6 @@ static SIGINT_FLAG: AtomicBool = AtomicBool::new(false);
 
 type Connections = Arc<Mutex<HashMap<ThreadId, TcpStream>>>;  // 为了唤醒阻塞中的线程
 
-const MAX_MSG_LEN: usize = 120;
-const BUFFER_SIZE: usize = MAX_MSG_LEN + 2 + 18;
-
 fn main() {
     // 创建TCP监听器，绑定到指定地址和端口
     let listener = TcpListener::bind("0.0.0.0:8080").expect("无法绑定到地址");
