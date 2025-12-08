@@ -1,8 +1,6 @@
 use tokio::net::{TcpListener};
 use tokio::sync::Notify;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::collections::{HashMap};
-use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use signal_hook::consts::SIGINT;
 use signal_hook::iterator::Signals;
@@ -62,8 +60,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
+        // tokio::select! 允许同时等待多个异步操作，一旦其中任何一个操作完成，就会执行对应的分支。
         tokio::select! {
-            // 监听新的连接
+            // 异步操作1 监听新的连接
             result = listener.accept() => {
                 match result {
                     Ok((stream, _)) => {
@@ -84,7 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            // 等待关闭通知
+            // 异步操作2 等待关闭通知
             _ = SHUTDOWN_NOTIFY.notified() => {
                 println!("[srv] select 收到关闭通知");
                 break;
@@ -102,5 +101,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 正常退出服务器
     println!("服务器关闭");
-    return Ok(())
+    Ok(())
 }

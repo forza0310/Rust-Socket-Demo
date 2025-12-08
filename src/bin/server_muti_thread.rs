@@ -1,6 +1,5 @@
 use std::collections::HashMap;
-use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use signal_hook::consts::{SIGINT,};
 use signal_hook::iterator::Signals;

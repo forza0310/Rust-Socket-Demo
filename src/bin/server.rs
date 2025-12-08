@@ -7,13 +7,15 @@ use signal_hook::consts::{SIGINT, SIGPIPE,};
 use signal_hook::iterator::Signals;
 use rand::Rng;
 
+use socket::network_handler::Pdu;
+
 // 使用原子变量作为全局sigint_flag，0表示未收到信号，1表示收到SIGINT信号
 static SIGINT_FLAG: AtomicBool = AtomicBool::new(false);
 
 // 用于跟踪所有活动连接的结构
 type Connections = Arc<Mutex<HashMap<u32, TcpStream>>>;
 
-const MAX_MSG_LEN: usize = 120;
+const MAX_MSG_LEN: usize = 255;
 const BUFFER_SIZE: usize = MAX_MSG_LEN + 2 + 18;
 
 // rust 中捕获SIGPIPE信号是一个unstable的功能
@@ -73,7 +75,9 @@ fn main() {
 
 fn handle_client(mut stream: TcpStream, peer_addr: SocketAddr, veri_code: i32, mut signals: &mut Signals) {
     let mut buffer= [0_u8; BUFFER_SIZE];
-
+    let mut received_data: Vec<u8> = Vec::new(); // 存储已接收但尚未构成完整PDU的数据
+    let mut pdu: Option<Pdu> = None;
+    
     // 收发业务数据的小循环
     loop {
         // 非阻塞检查 pending 信号
@@ -97,34 +101,33 @@ fn handle_client(mut stream: TcpStream, peer_addr: SocketAddr, veri_code: i32, m
             }
             Ok(size) => {
                 println!("从客户端 {} 接收到 {} 字节数据", peer_addr, size);
+                received_data.extend_from_slice(&buffer[..size]);
+                // 解析自定义应用层协议PDU
+                if !Pdu::is_complete_pdu(&received_data) {
+                    continue; // 接收到的数据不完整，等待下一次接收
+                }
+                match Pdu::payload_size(&received_data) {
+                    Some(expected_size) => {
+                        pdu = Pdu::from_bytes(&received_data[..expected_size]);
+                        received_data.drain(..expected_size); // 移除已处理的数据
+                    }
+                    None => { // 输入的buffer没有内容
+                        continue;
+                    }
+                }
 
-                // 解析自定义应用层协议PDU（在这里只是简单地回显）
-                // 实际应用中可以在此处添加业务逻辑处理
-                let response = format!("({}){}", veri_code, String::from_utf8_lossy(&buffer[..size]));
-                println!("{}", response);
-
+                println!("{}", pdu.as_ref().unwrap());
                 // 将接收到的数据原样发送回客户端（实现echo功能）
-                match stream.write_all(response.as_bytes()) {
+                let vec = pdu.unwrap().to_vec();
+                match stream.write_all(vec.as_slice()) {
                     Ok(_) => {
-                        println!("向客户端 {} 发送 {} 字节数据",peer_addr, size);
+                        println!("向客户端 {} 发送 {} 字节数据", peer_addr, vec.len());
                     }
                     Err(e) => {
                         eprintln!("写入客户端 {} 失败: {}", peer_addr, e);
                         break;
                     }
                 }
-                // // 循环发送数据，直到发送成功或者发生错误（用来测试broken pipe）
-                // loop {
-                //     match stream.write_all(response.as_bytes()) {
-                //         Ok(_) => {
-                //             println!("向客户端 {} 发送 {} 字节数据",peer_addr, size);
-                //         }
-                //         Err(e) => {
-                //             eprintln!("写入客户端 {} 失败: {}", peer_addr, e);
-                //             break;
-                //         }
-                //     }
-                // }
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 // 非阻塞模式下没有数据可读，继续执行其他任务

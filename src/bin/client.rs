@@ -1,8 +1,10 @@
-use std::net::{Shutdown, TcpStream};
-use std::io::{stdin, stdout, Read, Write};
+use std::net::{TcpStream};
+use std::io::{stdin, Read, Write};
 
-const MAX_MSG_LEN: usize = 120;
-const BUFFER_SIZE: usize = MAX_MSG_LEN + 2 + 18;
+use socket::network_handler::Pdu;
+
+const MAX_MSG_LEN: usize = 255;
+const BUFFER_SIZE: usize = MAX_MSG_LEN + 1;
 
 fn main() {
     // 连接到服务器
@@ -30,7 +32,8 @@ fn main() {
 
         if !input_buffer.is_empty() {
             println!("[ECH_RQT]{}", input_buffer);
-            match stream.write_all(input_buffer.as_bytes()) {
+            let pdu = Pdu::new(input_buffer.as_bytes());
+            match stream.write_all(pdu.unwrap().to_vec().as_slice()) {
                 Ok(_) => {
                     // 消息已发送
                 }
@@ -41,23 +44,42 @@ fn main() {
             }
         }
 
-        match stream.read(&mut buffer) {
-            Ok(0) => {
-                println!("服务器已关闭连接");
-                break;
-            }
-            Ok(size) => {
-                let message = String::from_utf8_lossy(&buffer[..size]);
-                print!("[ECH_REP] {}", message);
-                stdout().flush().unwrap();
-            }
-            Err(e) => {
-                eprintln!("读取服务器消息失败: {}", e);
-                break;
+        let mut received_data: Vec<u8> = Vec::new(); // 存储已接收但尚未构成完整PDU的数据
+        let mut pdu: Option<Pdu> = None;
+        loop {
+            match stream.read(&mut buffer) {
+                Ok(0) => {
+                    println!("服务器已关闭连接");
+                    break;
+                }
+                Ok(size) => {
+                    println!("从服务器接收到 {} 字节数据", size);
+
+                    received_data.extend_from_slice(&buffer[..size]);
+                    // 解析自定义应用层协议PDU
+                    if !Pdu::is_complete_pdu(&received_data) {
+                        continue; // 接收到的数据不完整，等待下一次接收
+                    }
+                    match Pdu::payload_size(&received_data) {
+                        Some(expected_size) => {
+                            pdu = Pdu::from_bytes(&received_data[..expected_size]);
+                            received_data.clear();
+                        }
+                        None => { // 输入的buffer没有内容
+                            continue;
+                        }
+                    }
+
+                    println!("收到PDU: {}", pdu.as_ref().unwrap());
+                    break;
+                }
+                Err(e) => {
+                    eprintln!("读取服务器消息失败: {}", e);
+                    break;
+                }
             }
         }
     }
-
 
     println!("[cli] client is to return!");
 }
