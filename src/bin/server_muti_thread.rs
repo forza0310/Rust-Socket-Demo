@@ -98,18 +98,18 @@ fn main() {
                 let peer_addr = stream.peer_addr().unwrap();
                 println!("[srv] client[{}] is accepted!", peer_addr);
 
-                // 将新连接添加到连接管理器中
-                connections.lock().unwrap().insert(std::thread::current().id(), stream.try_clone().unwrap());
-
                 // 克隆需要传递给线程的变量
                 let connections_clone = connections.clone();
                 let stream_clone = stream.try_clone().unwrap(); 
 
                 // 创建新线程处理客户端请求
                 let handle = std::thread::spawn(move || {
-                    handle_client(stream_clone, peer_addr, std::thread::current().id());
+                    let thread_id = std::thread::current().id();
+                    // 将新连接添加到连接管理器中
+                    connections_clone.lock().unwrap().insert(thread_id, stream);
+                    handle_client(stream_clone, peer_addr, thread_id);
                     // 从连接管理器中移除已处理的连接
-                    connections_clone.lock().unwrap().remove(&std::thread::current().id());
+                    connections_clone.lock().unwrap().remove(&thread_id);
                 });
                 thread_handles.insert(handle.thread().id(), handle);
             }

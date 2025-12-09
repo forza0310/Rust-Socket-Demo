@@ -1,22 +1,15 @@
-use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use signal_hook::consts::{SIGINT, SIGPIPE,};
 use signal_hook::iterator::Signals;
-use rand::Rng;
 
 use socket::network_handler::Pdu;
 
 // 使用原子变量作为全局sigint_flag，0表示未收到信号，1表示收到SIGINT信号
 static SIGINT_FLAG: AtomicBool = AtomicBool::new(false);
 
-// 用于跟踪所有活动连接的结构
-type Connections = Arc<Mutex<HashMap<u32, TcpStream>>>;
-
-const MAX_MSG_LEN: usize = 255;
-const BUFFER_SIZE: usize = MAX_MSG_LEN + 2 + 18;
+const BUFFER_SIZE: usize = 1024;
 
 // rust 中捕获SIGPIPE信号是一个unstable的功能
 // https://github.com/rust-lang/rust/pull/13158 native: Ignore SIGPIPE by default
@@ -24,13 +17,12 @@ const BUFFER_SIZE: usize = MAX_MSG_LEN + 2 + 18;
 // https://github.com/rust-lang/rust/issues/62569
 // https://github.com/rust-lang/rust/pull/124480
 fn main() {
-    let veri_code = rand::rng().random_range(10000..100000);
     // 创建TCP监听器，绑定到指定地址和端口
     let listener = TcpListener::bind("0.0.0.0:8080").expect("无法绑定到地址");
     listener.set_nonblocking(true).expect("无法设置非阻塞模式");
 
     let local_addr = listener.local_addr().unwrap().to_string();
-    println!("[srv] server[{}] is initializing![{}]", local_addr, veri_code);
+    println!("[srv] server[{}] is initializing!", local_addr);
 
     // 设置信号处理
     // let mut signals = Signals::new(&[SIGINT, SIGPIPE]).expect("无法创建信号处理器");
@@ -58,7 +50,7 @@ fn main() {
             Ok((stream, _)) => {
                 let peer_addr = stream.peer_addr().unwrap();
                 println!("[srv] client[{}] is accepted!", peer_addr);
-                handle_client(stream, peer_addr, veri_code, &mut signals);
+                handle_client(stream, peer_addr, &mut signals);
             }
             Err(e) => {
                 eprintln!("接受连接失败: {}", e);
@@ -73,11 +65,11 @@ fn main() {
     println!("服务器关闭");
 }
 
-fn handle_client(mut stream: TcpStream, peer_addr: SocketAddr, veri_code: i32, mut signals: &mut Signals) {
+fn handle_client(mut stream: TcpStream, peer_addr: SocketAddr, mut signals: &mut Signals) {
     let mut buffer= [0_u8; BUFFER_SIZE];
     let mut received_data: Vec<u8> = Vec::new(); // 存储已接收但尚未构成完整PDU的数据
     let mut pdu: Option<Pdu> = None;
-    
+
     // 收发业务数据的小循环
     loop {
         // 非阻塞检查 pending 信号
