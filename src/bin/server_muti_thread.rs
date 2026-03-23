@@ -28,10 +28,7 @@ fn main() {
     // - 但这个新的 Arc 实例指向的是同一个 Mutex<HashMap<u32, TcpStream>>
     let connections: Connections = Arc::new(Mutex::new(HashMap::new()));
     let connections_clone = connections.clone(); // Arc 智能指针，它指向堆上的 HashMap
-
-    // 创建线程句柄存储器
-    let mut thread_handles: HashMap<ThreadId, JoinHandle<()>> = HashMap::new();
-
+    
     // 设置信号处理
     let mut signals = Signals::new(&[SIGINT,]).expect("无法创建信号处理器");
 
@@ -63,6 +60,9 @@ fn main() {
             }
         }
     });
+
+    // 创建线程句柄存储器
+    let mut thread_handles: HashMap<ThreadId, JoinHandle<()>> = HashMap::new();
 
     // 多线程 处理客户端请求的大循环
     loop {

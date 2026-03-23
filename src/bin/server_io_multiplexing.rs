@@ -17,9 +17,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let local_addr = listener.local_addr().unwrap().to_string();
     println!("[srv] server[{}] is initializing!", local_addr);
 
-    // 创建线程句柄存储器
-    let mut task_handles: HashMap<u32, JoinHandle<()>> = HashMap::new();
-
     // 设置信号处理
     let mut signals = Signals::new(&[SIGINT,]).expect("无法创建信号处理器");
 
@@ -38,6 +35,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // 创建线程句柄存储器
+    let mut task_handles: HashMap<u32, JoinHandle<()>> = HashMap::new();
     let mut connection_id: u32 = 0;
 
     // 异步处理客户端请求的大循环
